@@ -1,0 +1,134 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+# vim: set ts=2 sw=2 tw=0 fo=cnqoj
+
+version: 2
+
+project_name: kctl
+
+before:
+  hooks:
+    - go mod tidy
+    - go generate ./...
+
+builds:
+  - id: kctl
+    main: ./main/main.go
+    binary: kctl
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X kctl/cmd/version.version={{.Version}}
+      - -X kctl/cmd/version.commit={{.Commit}}
+      - -X kctl/cmd/version.date={{.Date}}
+      - -X kctl/cmd/version.builtBy=goreleaser
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: default
+    formats:
+      - tar.gz
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- .Os }}_
+      {{- .Arch }}
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - README.md
+      - LICENSE*
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+  ids:
+    - default
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+      - Merge pull request
+      - Merge branch
+  groups:
+    - title: "New Features"
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: "Bug Fixes"
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: "Performance Improvements"
+      regexp: '^.*?perf(\([[:word:]]+\))??!?:.+$'
+      order: 2
+    - title: "Refactoring"
+      regexp: '^.*?refactor(\([[:word:]]+\))??!?:.+$'
+      order: 3
+    - title: "Other Changes"
+      order: 999
+
+release:
+  github:
+    owner: "{{ .Env.GITHUB_REPOSITORY_OWNER }}"
+    name: kctl
+  draft: false
+  prerelease: auto
+  mode: replace
+  header: |
+    ## kctl {{ .Version }}
+    
+    Kubernetes Kubelet 安全工具集
+  footer: |
+    ---
+    
+    **Full Changelog**: https://github.com/{{ .Env.GITHUB_REPOSITORY_OWNER }}/kctl/compare/{{ .PreviousTag }}...{{ .Tag }}
+    
+    ## Installation
+    
+    ### macOS (Apple Silicon)
+    ```bash
+    curl -LO https://github.com/{{ .Env.GITHUB_REPOSITORY_OWNER }}/kctl/releases/download/{{ .Tag }}/kctl_{{ .Version }}_darwin_arm64.tar.gz
+    tar -xzf kctl_{{ .Version }}_darwin_arm64.tar.gz
+    chmod +x kctl && sudo mv kctl /usr/local/bin/
+    ```
+    
+    ### macOS (Intel)
+    ```bash
+    curl -LO https://github.com/{{ .Env.GITHUB_REPOSITORY_OWNER }}/kctl/releases/download/{{ .Tag }}/kctl_{{ .Version }}_darwin_amd64.tar.gz
+    tar -xzf kctl_{{ .Version }}_darwin_amd64.tar.gz
+    chmod +x kctl && sudo mv kctl /usr/local/bin/
+    ```
+    
+    ### Linux (amd64)
+    ```bash
+    curl -LO https://github.com/{{ .Env.GITHUB_REPOSITORY_OWNER }}/kctl/releases/download/{{ .Tag }}/kctl_{{ .Version }}_linux_amd64.tar.gz
+    tar -xzf kctl_{{ .Version }}_linux_amd64.tar.gz
+    chmod +x kctl && sudo mv kctl /usr/local/bin/
+    ```
+    
+    ### Linux (arm64)
+    ```bash
+    curl -LO https://github.com/{{ .Env.GITHUB_REPOSITORY_OWNER }}/kctl/releases/download/{{ .Tag }}/kctl_{{ .Version }}_linux_arm64.tar.gz
+    tar -xzf kctl_{{ .Version }}_linux_arm64.tar.gz
+    chmod +x kctl && sudo mv kctl /usr/local/bin/
+    ```
+    
+    ### Windows
+    Download `kctl_{{ .Version }}_windows_amd64.zip` from the assets below and extract it.
