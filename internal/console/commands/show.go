@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"kctl/config"
+	"kctl/internal/output"
 	"kctl/internal/session"
 )
 
@@ -36,15 +37,17 @@ func (c *ShowCmd) Usage() string {
   options    显示当前配置
   status     显示会话状态
   env        显示环境信息
+  kubelets   显示发现的 Kubelet 节点
 
 示例：
   show options
-  show status`
+  show status
+  show kubelets`
 }
 
 func (c *ShowCmd) Execute(sess *session.Session, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("用法: show <options|status|env>")
+		return fmt.Errorf("用法: show <options|status|env|kubelets>")
 	}
 
 	what := args[0]
@@ -59,8 +62,11 @@ func (c *ShowCmd) Execute(sess *session.Session, args []string) error {
 	case "env":
 		c.showEnv(sess)
 
+	case "kubelets", "kubelet", "nodes":
+		c.showKubelets(sess)
+
 	default:
-		return fmt.Errorf("未知选项: %s (可用: options, status, env)", what)
+		return fmt.Errorf("未知选项: %s (可用: options, status, env, kubelets)", what)
 	}
 
 	return nil
@@ -203,4 +209,48 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%d minutes", int(d.Minutes()))
 	}
 	return fmt.Sprintf("%d hours", int(d.Hours()))
+}
+
+func (c *ShowCmd) showKubelets(sess *session.Session) {
+	p := sess.Printer
+
+	kubelets := sess.GetCachedKubelets()
+
+	p.Println()
+	p.Printf("  %s\n", p.Colored(config.ColorCyan, "Discovered Kubelet Nodes"))
+	p.Println("  " + p.Colored(config.ColorGray, "─────────────────────────────────────────"))
+
+	if len(kubelets) == 0 {
+		p.Printf("  %s\n", p.Colored(config.ColorGray, "(none - run 'discover <target>' to scan)"))
+		p.Println()
+		return
+	}
+
+	// 只显示 Kubelet 节点
+	var kubeletNodes [][]string
+	for _, k := range kubelets {
+		if k.IsKubelet {
+			kubeletNodes = append(kubeletNodes, []string{
+				k.IP,
+				fmt.Sprintf("%d", k.Port),
+				k.HealthPath,
+				k.DiscoveredAt.Format("15:04:05"),
+			})
+		}
+	}
+
+	if len(kubeletNodes) == 0 {
+		p.Printf("  %s\n", p.Colored(config.ColorGray, "(no Kubelet nodes found)"))
+		p.Println()
+		return
+	}
+
+	tablePrinter := output.NewTablePrinter()
+	tablePrinter.PrintSimple(
+		[]string{"IP", "PORT", "HEALTH", "DISCOVERED"},
+		kubeletNodes,
+	)
+
+	p.Printf("\n  共 %d 个 Kubelet 节点\n", len(kubeletNodes))
+	p.Printf("  使用 'set target <ip>' 选择目标\n\n")
 }
