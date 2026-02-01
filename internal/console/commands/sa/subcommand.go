@@ -1,8 +1,6 @@
 package sa
 
 import (
-	"fmt"
-
 	"kctl/internal/session"
 )
 
@@ -65,7 +63,7 @@ func Execute(sess *session.Session, args []string) error {
 
 // Usage 返回 SA 命令的用法
 func Usage() string {
-	return fmt.Sprintf(`sa [subcommand] [options]
+	return `sa [subcommand] [options]
 
 ServiceAccount 相关操作
 
@@ -80,5 +78,5 @@ ServiceAccount 相关操作
   sa list --risky       只显示有风险的 SA
   sa scan               扫描所有 SA
   sa use kube-system/default
-  sa info`)
+  sa info`
 }
