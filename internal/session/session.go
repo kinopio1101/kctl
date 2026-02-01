@@ -58,7 +58,8 @@ type Session struct {
 	CurrentSA *types.ServiceAccountRecord
 
 	// 扫描结果缓存
-	PodCache []types.PodContainerInfo
+	PodCache     []types.PodContainerInfo
+	KubeletCache []types.KubeletNode // 发现的 Kubelet 节点缓存
 
 	// 状态
 	IsConnected  bool
@@ -167,14 +168,45 @@ func (s *Session) Disconnect() {
 	s.IsConnected = false
 }
 
-// GetKubeletClient 获取 Kubelet 客户端
+// GetKubeletClient 获取 Kubelet 客户端（懒加载）
 func (s *Session) GetKubeletClient() (kubeletclient.Client, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	if !s.IsConnected || s.kubeletClient == nil {
-		return nil, fmt.Errorf("未连接到 Kubelet，请先执行 'connect'")
+	// 如果已连接，直接返回
+	if s.IsConnected && s.kubeletClient != nil {
+		return s.kubeletClient, nil
 	}
+
+	// 懒加载：自动连接
+	if s.Config.KubeletIP == "" {
+		return nil, fmt.Errorf("未设置 Kubelet IP，请使用 'set target <ip>' 设置")
+	}
+
+	if s.Config.Token == "" {
+		return nil, fmt.Errorf("未设置 Token，请使用 'set token <token>' 或 'set token-file <path>' 设置")
+	}
+
+	// 创建客户端配置
+	cfg := client.DefaultConfig()
+	if s.Config.ProxyURL != "" {
+		cfg = cfg.WithProxy(s.Config.ProxyURL)
+	}
+	s.clientConfig = cfg
+
+	// 创建 Kubelet 客户端
+	kubelet, err := kubeletclient.NewClient(
+		s.Config.KubeletIP,
+		s.Config.KubeletPort,
+		s.Config.Token,
+		cfg,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("创建 Kubelet 客户端失败: %w", err)
+	}
+
+	s.kubeletClient = kubelet
+	s.IsConnected = true
 
 	return s.kubeletClient, nil
 }
@@ -272,6 +304,20 @@ func (s *Session) GetCachedPods() []types.PodContainerInfo {
 	return s.PodCache
 }
 
+// CacheKubelets 缓存发现的 Kubelet 节点
+func (s *Session) CacheKubelets(nodes []types.KubeletNode) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.KubeletCache = nodes
+}
+
+// GetCachedKubelets 获取缓存的 Kubelet 节点
+func (s *Session) GetCachedKubelets() []types.KubeletNode {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.KubeletCache
+}
+
 // MarkScanned 标记已扫描
 func (s *Session) MarkScanned() {
 	s.mu.Lock()
@@ -286,6 +332,7 @@ func (s *Session) ClearCache() {
 	defer s.mu.Unlock()
 
 	s.PodCache = nil
+	s.KubeletCache = nil
 	s.CurrentSA = nil
 	s.IsScanned = false
 	s.k8sClients = make(map[string]k8sclient.Client)

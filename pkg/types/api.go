@@ -1,5 +1,7 @@
 package types
 
+import "time"
+
 // ==================== Kubelet API 响应类型 ====================
 
 // KubeletPodsResponse 表示 Kubelet /pods API 的响应结构
@@ -236,6 +238,18 @@ type ProbeResult struct {
 	IsKubelet  bool
 	HealthPath string
 	Error      error
+}
+
+// ==================== Kubelet 节点类型 ====================
+
+// KubeletNode 表示发现的 Kubelet 节点
+type KubeletNode struct {
+	IP           string
+	Port         int
+	Reachable    bool
+	IsKubelet    bool
+	HealthPath   string // /healthz 或 /pods
+	DiscoveredAt time.Time
 }
 
 // ==================== 路由相关类型 ====================
