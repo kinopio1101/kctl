@@ -31,9 +31,10 @@ type KubeletPodsResponse struct {
 			PodIP             string `json:"podIP"`
 			HostIP            string `json:"hostIP"`
 			ContainerStatuses []struct {
-				Name  string `json:"name"`
-				Ready bool   `json:"ready"`
-				State struct {
+				Name        string `json:"name"`
+				ContainerID string `json:"containerID"`
+				Ready       bool   `json:"ready"`
+				State       struct {
 					Running *struct {
 						StartedAt string `json:"startedAt"`
 					} `json:"running"`

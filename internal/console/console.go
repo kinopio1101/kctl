@@ -156,6 +156,8 @@ func (c *Console) completer(d prompt.Document) []prompt.Suggest {
 		return c.getRunSuggestions(args, word)
 	case "portforward", "pf":
 		return c.getPortForwardSuggestions(args, word)
+	case "pid2pod", "p2p":
+		return c.getPid2PodSuggestions(word)
 	}
 
 	return nil
@@ -174,6 +176,7 @@ func (c *Console) getCommandSuggestions(prefix string) []prompt.Suggest {
 		{Text: "exec", Description: "执行命令 (WebSocket)"},
 		{Text: "run", Description: "执行命令 (/run API)"},
 		{Text: "portforward", Description: "端口转发"},
+		{Text: "pid2pod", Description: "将 PID 映射到 Pod"},
 		{Text: "set", Description: "设置配置"},
 		{Text: "show", Description: "显示信息"},
 		{Text: "export", Description: "导出结果"},
@@ -556,6 +559,15 @@ func (c *Console) getTimeoutSuggestions(word string) []prompt.Suggest {
 		{Text: "1", Description: "1 秒"},
 		{Text: "3", Description: "3 秒 (默认)"},
 		{Text: "5", Description: "5 秒"},
+	}
+	return prompt.FilterHasPrefix(suggestions, word, true)
+}
+
+// getPid2PodSuggestions 获取 pid2pod 命令的补全
+func (c *Console) getPid2PodSuggestions(word string) []prompt.Suggest {
+	suggestions := []prompt.Suggest{
+		{Text: "--pid", Description: "只查看指定 PID"},
+		{Text: "--all", Description: "显示所有进程（包括非容器进程）"},
 	}
 	return prompt.FilterHasPrefix(suggestions, word, true)
 }

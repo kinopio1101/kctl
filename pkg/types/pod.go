@@ -42,6 +42,7 @@ type PodContainerInfo struct {
 // ContainerDetail 容器详细信息
 type ContainerDetail struct {
 	Name         string
+	ContainerID  string // 容器 ID（短格式）
 	Image        string
 	Ready        bool
 	State        string // Running, Waiting, Terminated

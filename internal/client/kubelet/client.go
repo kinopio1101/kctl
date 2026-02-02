@@ -166,16 +166,34 @@ func (c *kubeletClient) GetPodsWithContainers(ctx context.Context) ([]types.PodC
 
 		// 构建容器状态映射
 		containerStatusMap := make(map[string]struct {
-			Ready     bool
-			State     string
-			StartedAt string
+			ContainerID string
+			Ready       bool
+			State       string
+			StartedAt   string
 		})
 		for _, cs := range item.Status.ContainerStatuses {
 			status := struct {
-				Ready     bool
-				State     string
-				StartedAt string
+				ContainerID string
+				Ready       bool
+				State       string
+				StartedAt   string
 			}{Ready: cs.Ready}
+
+			// 解析容器 ID（格式: containerd://abc123... 或 docker://abc123...）
+			if cs.ContainerID != "" {
+				containerID := cs.ContainerID
+				// 移除运行时前缀
+				if idx := strings.Index(containerID, "://"); idx != -1 {
+					containerID = containerID[idx+3:]
+				}
+				// 取前 12 个字符作为短 ID
+				if len(containerID) >= 12 {
+					status.ContainerID = containerID[:12]
+				} else {
+					status.ContainerID = containerID
+				}
+			}
+
 			if cs.State.Running != nil {
 				status.State = "Running"
 				status.StartedAt = cs.State.Running.StartedAt
@@ -196,6 +214,7 @@ func (c *kubeletClient) GetPodsWithContainers(ctx context.Context) ([]types.PodC
 
 			// 获取容器状态
 			if cs, ok := containerStatusMap[container.Name]; ok {
+				cd.ContainerID = cs.ContainerID
 				cd.Ready = cs.Ready
 				cd.State = cs.State
 				cd.StartedAt = cs.StartedAt

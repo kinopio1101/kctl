@@ -57,7 +57,10 @@
 | `discover` | Scan network ranges to find Kubelet endpoints |
 | `sa scan` | Extract and analyze SA tokens from all Pods |
 | `sa list` | List discovered ServiceAccounts with risk levels |
-| `exec` | Execute commands in any Pod via Kubelet API |
+| `exec` | Execute commands in any Pod via Kubelet API (WebSocket) |
+| `run` | Execute commands via /run API (simpler, no WebSocket) |
+| `portforward` | Port forwarding through Kubelet API (SPDY) |
+| `pid2pod` | Map Linux PIDs to Pod metadata (in-Pod only) |
 | `pods` | List all Pods on the node |
 
 ## Installation
@@ -94,6 +97,9 @@ go build -o kctl ./main/main.go
 
 # Specify target
 ./kctl console -t 10.0.0.1
+
+# Full connection parameters
+./kctl console -t 10.0.0.1 -p 10250 --token "eyJ..." --api-server 10.0.0.1 --api-port 6443
 
 # Use SOCKS5 proxy
 ./kctl console -t 10.0.0.1 --proxy socks5://127.0.0.1:1080
@@ -146,7 +152,10 @@ kctl [default/attacker CRITICAL]>
 | `sa use <ns/name>` | Switch to specified SA |
 | `sa info` | Show current SA details |
 | `pods` | List Pods on the node |
-| `exec` | Execute command in Pod |
+| `exec` | Execute command in Pod (WebSocket) |
+| `run` | Execute command in Pod (/run API) |
+| `portforward` | Port forwarding to Pod |
+| `pid2pod` | Map PIDs to Pods (in-Pod only) |
 | `set <key> <value>` | Set configuration |
 | `show options` | Show current configuration |
 | `show status` | Show session status |
@@ -191,6 +200,54 @@ sa use kube-system/cluster-admin
 
 # Show current SA details
 sa info
+```
+
+### Command Execution
+
+```bash
+# Interactive shell (WebSocket)
+exec -it nginx-pod
+
+# Execute command in specific Pod
+exec nginx-pod -- cat /etc/passwd
+
+# Execute across all Pods
+exec --all-pods -- whoami
+
+# Execute with filters
+exec --all-pods --filter-ns kube-system -- id
+
+# Use /run API (simpler, no WebSocket)
+run nginx-pod --cmd "cat /etc/passwd"
+
+# Run across all Pods
+run --all-pods --cmd "hostname"
+```
+
+### Port Forwarding
+
+```bash
+# Forward local port 8080 to Pod port 80
+portforward nginx-pod 8080:80
+
+# Forward with custom listen address
+portforward nginx-pod 8080:80 --address 0.0.0.0
+
+# Stop port forwarding
+pf stop
+```
+
+### PID to Pod Mapping (In-Pod Only)
+
+```bash
+# Show all container processes with Pod info
+pid2pod
+
+# Look up specific PID
+pid2pod --pid 1234
+
+# Show all processes including non-container
+pid2pod --all
 ```
 
 ## Attack Scenario
