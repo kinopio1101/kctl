@@ -132,8 +132,8 @@ func (c *Console) completer(d prompt.Document) []prompt.Suggest {
 
 	// 根据命令补全参数
 	switch cmd {
-	case "use":
-		return c.getUseSuggestions(word)
+	case "mode":
+		return c.getModeSuggestions(word)
 	case "exec":
 		return c.getExecSuggestions(args, word)
 	case "set":
@@ -145,7 +145,7 @@ func (c *Console) completer(d prompt.Document) []prompt.Suggest {
 	case "help", "?", "h":
 		return c.getCommandSuggestions(word)
 	case "sa":
-		return c.getSAFlagSuggestions(word)
+		return c.getSASuggestions(args, word)
 	case "pods", "po":
 		return c.getPodsFlagSuggestions(word)
 	case "scan":
@@ -167,12 +167,11 @@ func (c *Console) completer(d prompt.Document) []prompt.Suggest {
 func (c *Console) getCommandSuggestions(prefix string) []prompt.Suggest {
 	suggestions := []prompt.Suggest{
 		{Text: "help", Description: "显示帮助信息"},
+		{Text: "mode", Description: "查看或切换运行模式"},
 		{Text: "connect", Description: "连接到 Kubelet"},
-		{Text: "scan", Description: "扫描 SA 权限"},
-		{Text: "sa", Description: "列出 ServiceAccount"},
+		{Text: "discover", Description: "扫描网络发现 Kubelet"},
+		{Text: "sa", Description: "ServiceAccount 操作"},
 		{Text: "pods", Description: "列出 Pod"},
-		{Text: "use", Description: "选择 ServiceAccount"},
-		{Text: "info", Description: "显示当前 SA 详情"},
 		{Text: "exec", Description: "执行命令 (WebSocket)"},
 		{Text: "run", Description: "执行命令 (/run API)"},
 		{Text: "portforward", Description: "端口转发"},
@@ -405,8 +404,49 @@ func (c *Console) getExportSuggestions(word string) []prompt.Suggest {
 	return prompt.FilterHasPrefix(suggestions, word, true)
 }
 
+func (c *Console) getModeSuggestions(word string) []prompt.Suggest {
+	suggestions := []prompt.Suggest{
+		{Text: "kubelet", Description: "Kubelet API (10250)"},
+		{Text: "kubernetes", Description: "API Server (6443)"},
+	}
+	return prompt.FilterHasPrefix(suggestions, word, true)
+}
+
 // getSAFlagSuggestions 获取 sa 命令的选项补全
 func (c *Console) getSAFlagSuggestions(word string) []prompt.Suggest {
+	suggestions := []prompt.Suggest{
+		{Text: "scan", Description: "扫描所有 Pod 的 SA Token"},
+		{Text: "list", Description: "列出已扫描的 SA"},
+		{Text: "use", Description: "选择 SA 作为当前身份"},
+		{Text: "info", Description: "显示当前 SA 详情"},
+		{Text: "--admin", Description: "只显示 cluster-admin"},
+		{Text: "--risky", Description: "只显示有风险的 SA"},
+		{Text: "-n", Description: "按命名空间过滤"},
+		{Text: "--perms", Description: "显示权限"},
+		{Text: "--token", Description: "显示 Token"},
+	}
+	return prompt.FilterHasPrefix(suggestions, word, true)
+}
+
+func (c *Console) getSASuggestions(args []string, word string) []prompt.Suggest {
+	if len(args) >= 2 {
+		subCmd := args[1]
+		if word != "" && len(args) == 2 {
+			return c.getSAFlagSuggestions(word)
+		}
+		switch subCmd {
+		case "use":
+			return c.getUseSuggestions(word)
+		case "scan":
+			return c.getScanFlagSuggestions(word)
+		case "list":
+			return c.getSAListFlagSuggestions(word)
+		}
+	}
+	return c.getSAFlagSuggestions(word)
+}
+
+func (c *Console) getSAListFlagSuggestions(word string) []prompt.Suggest {
 	suggestions := []prompt.Suggest{
 		{Text: "--admin", Description: "只显示 cluster-admin"},
 		{Text: "--risky", Description: "只显示有风险的 SA"},
@@ -622,22 +662,7 @@ func (c *Console) getPrompt() string {
 // getLivePrefix 动态获取提示符
 // 注意：go-prompt 不支持在提示符中使用 ANSI 颜色代码，所以这里不着色
 func (c *Console) getLivePrefix() (string, bool) {
-	sa := c.session.GetCurrentSA()
-	if sa == nil {
-		return "kctl [default]> ", true
-	}
-
-	// 格式: kctl [namespace/name RISK]>
-	risk := sa.RiskLevel
-	if sa.IsClusterAdmin {
-		risk = "ADMIN"
-	}
-
-	if risk != "" && risk != string(config.RiskNone) {
-		return fmt.Sprintf("kctl [%s/%s %s]> ", sa.Namespace, sa.Name, risk), true
-	}
-
-	return fmt.Sprintf("kctl [%s/%s]> ", sa.Namespace, sa.Name), true
+	return fmt.Sprintf("kctl [%s]> ", c.session.GetPromptDisplay()), true
 }
 
 // autoConnect 自动连接到 Kubelet
