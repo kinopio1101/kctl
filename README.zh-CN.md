@@ -54,6 +54,9 @@ kctl 是一个轻量级的 Kubernetes 安全审计工具，专门针对 Kubelet 
 # 指定目标进入
 ./kctl console -t 10.0.0.1
 
+# 完整连接参数
+./kctl console -t 10.0.0.1 -p 10250 --token "eyJ..." --api-server 10.0.0.1 --api-port 6443
+
 # 使用代理
 ./kctl console -t 10.0.0.1 --proxy socks5://127.0.0.1:1080
 ```
@@ -103,7 +106,10 @@ kctl [default/attacker CRITICAL]>
 | `sa use <ns/name>` | 切换到指定的 SA |
 | `sa info` | 显示当前 SA 详情 |
 | `pods` | 列出节点上的 Pod |
-| `exec` | 在 Pod 中执行命令 |
+| `exec` | 在 Pod 中执行命令（WebSocket） |
+| `run` | 在 Pod 中执行命令（/run API） |
+| `portforward` | 端口转发到 Pod |
+| `pid2pod` | 将 PID 映射到 Pod（仅 Pod 内） |
 | `set <key> <value>` | 设置配置项 |
 | `show options` | 显示当前配置 |
 | `show status` | 显示会话状态 |
@@ -171,6 +177,60 @@ sa use kube-system/cluster-admin
 
 # 显示当前 SA 详情
 sa info
+```
+
+### exec 命令 - 命令执行
+
+通过 Kubelet API 在 Pod 中执行命令：
+
+```bash
+# 交互式 shell（WebSocket）
+exec -it nginx-pod
+
+# 在指定 Pod 执行命令
+exec nginx-pod -- cat /etc/passwd
+
+# 在所有 Pod 中执行
+exec --all-pods -- whoami
+
+# 排除指定命名空间
+exec --all-pods --filter-ns kube-system -- id
+
+# 使用 /run API（更简单，无需 WebSocket）
+run nginx-pod --cmd "cat /etc/passwd"
+
+# 在所有 Pod 中执行
+run --all-pods --cmd "hostname"
+```
+
+### portforward 命令 - 端口转发
+
+通过 Kubelet API 进行端口转发：
+
+```bash
+# 将本地 8080 端口转发到 Pod 的 80 端口
+portforward nginx-pod 8080:80
+
+# 指定监听地址
+portforward nginx-pod 8080:80 --address 0.0.0.0
+
+# 停止端口转发
+pf stop
+```
+
+### pid2pod 命令 - PID 映射（仅 Pod 内）
+
+将 Linux 进程 ID 映射到 Kubernetes Pod 元数据：
+
+```bash
+# 显示所有容器进程及其 Pod 信息
+pid2pod
+
+# 查看指定 PID
+pid2pod --pid 1234
+
+# 显示所有进程（包括非容器进程）
+pid2pod --all
 ```
 
 ### 典型工作流程
@@ -379,24 +439,6 @@ kubectl get clusterrolebindings -o json | jq -r '
     jq -e '.rules[] | select(.resources[] | contains("nodes/proxy"))' >/dev/null && \
     echo "[!] $line"
 done
-```
-
-## 命令行参数
-
-```
-Usage:
-  kctl console [flags]
-
-Flags:
-  -t, --target string       Kubelet IP 地址
-  -p, --port int            Kubelet 端口 (default 10250)
-      --token string        Token 字符串
-      --token-file string   Token 文件路径
-      --proxy string        SOCKS5 代理地址
-  -h, --help                help for console
-
-Global Flags:
-      --logLevel string     日志等级 (default "info")
 ```
 
 ## 风险等级说明

