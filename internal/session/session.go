@@ -47,6 +47,9 @@ type Session struct {
 	// 配置
 	Config SessionConfig
 
+	// 运行模式
+	Mode Mode
+
 	// 客户端（延迟初始化）
 	kubeletClient kubeletclient.Client
 	k8sClients    map[string]k8sclient.Client // token -> client 缓存
@@ -89,6 +92,7 @@ func NewSession() (*Session, error) {
 			APIServerPort: 443,
 			Concurrency:   config.DefaultScanConcurrency,
 		},
+		Mode:       DefaultMode,
 		k8sClients: make(map[string]k8sclient.Client),
 		DB:         database,
 		PodDB:      db.NewPodRepository(database),
@@ -287,17 +291,70 @@ func (s *Session) GetCurrentSA() *types.ServiceAccountRecord {
 	return s.CurrentSA
 }
 
+// GetMode 获取当前模式
+func (s *Session) GetMode() Mode {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.Mode
+}
+
+// SetMode 设置运行模式
+func (s *Session) SetMode(mode Mode) error {
+	if !mode.IsValid() {
+		return fmt.Errorf("无效的模式: %s，可选: kubelet, kubernetes", mode)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Mode = mode
+	return nil
+}
+
+// GetModeTarget 获取当前模式的目标地址
+func (s *Session) GetModeTarget() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	switch s.Mode {
+	case ModeKubelet:
+		if s.Config.KubeletIP != "" {
+			return fmt.Sprintf("%s:%d", s.Config.KubeletIP, s.Config.KubeletPort)
+		}
+	case ModeKubernetes:
+		if s.Config.APIServer != "" {
+			return s.Config.APIServer
+		}
+	}
+	return ""
+}
+
 // GetPromptDisplay 返回提示符显示的内容
 func (s *Session) GetPromptDisplay() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	// 格式: mode:target 或 mode:sa_info
+	modeStr := string(s.Mode)
+
 	if s.CurrentSA == nil {
-		return "default"
+		target := ""
+		switch s.Mode {
+		case ModeKubelet:
+			if s.Config.KubeletIP != "" {
+				target = s.Config.KubeletIP
+			}
+		case ModeKubernetes:
+			if s.Config.APIServer != "" {
+				target = s.Config.APIServer
+			}
+		}
+		if target != "" {
+			return fmt.Sprintf("%s:%s", modeStr, target)
+		}
+		return modeStr
 	}
 
-	// 格式: namespace/name RISK
-	display := fmt.Sprintf("%s/%s", s.CurrentSA.Namespace, s.CurrentSA.Name)
+	// 格式: mode:namespace/name RISK
+	display := fmt.Sprintf("%s:%s/%s", modeStr, s.CurrentSA.Namespace, s.CurrentSA.Name)
 
 	risk := s.CurrentSA.RiskLevel
 	if risk != "" && risk != string(config.RiskNone) {
