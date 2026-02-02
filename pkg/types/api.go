@@ -244,6 +244,22 @@ type RunResult struct {
 	Error  string
 }
 
+// ==================== PortForward 相关类型 ====================
+
+// PortForwardOptions 定义端口转发选项
+type PortForwardOptions struct {
+	Namespace string
+	Pod       string
+	Ports     []PortMapping // 支持多端口
+	Address   string        // 本地监听地址
+}
+
+// PortMapping 端口映射
+type PortMapping struct {
+	Local  uint16
+	Remote uint16
+}
+
 // ==================== 探测相关类型 ====================
 
 // ProbeResult 表示端口探测结果

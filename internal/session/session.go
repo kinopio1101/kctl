@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -233,7 +234,20 @@ func (s *Session) GetK8sClient(tokenStr string) (k8sclient.Client, error) {
 		}
 	}
 
-	k8s, err := k8sclient.NewClient("", tokenStr, cfg)
+	// 构建 API Server 地址
+	apiServer := s.Config.APIServer
+	if apiServer != "" {
+		// 如果没有协议前缀，添加 https://
+		if !strings.HasPrefix(apiServer, "http://") && !strings.HasPrefix(apiServer, "https://") {
+			apiServer = "https://" + apiServer
+		}
+		// 如果指定了端口，添加端口
+		if s.Config.APIServerPort > 0 && s.Config.APIServerPort != 443 {
+			apiServer = fmt.Sprintf("%s:%d", apiServer, s.Config.APIServerPort)
+		}
+	}
+
+	k8s, err := k8sclient.NewClient(apiServer, tokenStr, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("创建 K8s 客户端失败: %w", err)
 	}
@@ -404,6 +418,13 @@ func (s *Session) SetupCurrentSA() error {
 	// 检查当前 SA 的权限
 	p.Printf("%s Checking permissions...\n",
 		p.Colored(config.ColorBlue, "[*]"))
+
+	// 检查是否配置了 API Server
+	if s.Config.APIServer == "" && !s.InPod {
+		p.Warning("未设置 API Server，跳过权限检查。使用 'set api-server <addr>' 或 --api-server 参数设置")
+		s.SetCurrentSA(sa)
+		return nil
+	}
 
 	k8s, err := s.GetK8sClient(s.Config.Token)
 	if err != nil {

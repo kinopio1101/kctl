@@ -29,10 +29,6 @@ func AssessRisk(results []types.PermissionCheckResult) *RiskAssessment {
 		switch r.Level {
 		case config.PermLevelAdmin:
 			assessment.AdminPerms = append(assessment.AdminPerms, r)
-			// 检查是否是 cluster-admin
-			if r.Resource == "*" && r.Verb == "*" {
-				assessment.IsClusterAdmin = true
-			}
 		case config.PermLevelDangerous:
 			assessment.DangerousPerms = append(assessment.DangerousPerms, r)
 		case config.PermLevelSensitive:
@@ -41,6 +37,19 @@ func AssessRisk(results []types.PermissionCheckResult) *RiskAssessment {
 			assessment.NormalPerms = append(assessment.NormalPerms, r)
 		}
 	}
+
+	// 转换为 PermissionCheck 格式以便检查 IsClusterAdmin
+	var permissions []types.PermissionCheck
+	for _, r := range results {
+		permissions = append(permissions, types.PermissionCheck{
+			Resource:    r.Resource,
+			Verb:        r.Verb,
+			Group:       r.Group,
+			Subresource: r.Subresource,
+			Allowed:     r.Allowed,
+		})
+	}
+	assessment.IsClusterAdmin = IsClusterAdmin(permissions)
 
 	// 计算风险等级
 	if assessment.IsClusterAdmin {
@@ -77,11 +86,9 @@ func AssessRiskFromPermissions(permissions []types.PermissionCheck) *RiskAssessm
 
 // CalculateRiskLevel 计算权限的风险等级（快速版本）
 func CalculateRiskLevel(permissions []types.PermissionCheck) config.RiskLevel {
-	// 检查是否是集群管理员
-	for _, p := range permissions {
-		if p.Allowed && p.Resource == "*" && p.Verb == "*" {
-			return config.RiskAdmin
-		}
+	// 先检查是否是集群管理员
+	if IsClusterAdmin(permissions) {
+		return config.RiskAdmin
 	}
 
 	// 检查 CRITICAL 权限
@@ -101,10 +108,6 @@ func CalculateRiskLevel(permissions []types.PermissionCheck) config.RiskLevel {
 					return config.RiskCritical
 				}
 			}
-		}
-		// 通配符资源
-		if p.Resource == "*" {
-			return config.RiskCritical
 		}
 	}
 
@@ -159,11 +162,35 @@ func CalculateRiskLevel(permissions []types.PermissionCheck) config.RiskLevel {
 }
 
 // IsClusterAdmin 检查是否拥有集群管理员权限
+// 通过检查多个关键的高权限操作来判断
 func IsClusterAdmin(permissions []types.PermissionCheck) bool {
+	// 定义 cluster-admin 的关键权限指标
+	// 如果一个 SA 拥有这些权限，基本可以确定是 cluster-admin
+	adminIndicators := map[string]bool{
+		"clusterrolebindings:create": false, // 可以创建集群角色绑定
+		"clusterrolebindings:delete": false, // 可以删除集群角色绑定
+		"nodes:delete":               false, // 可以删除节点
+		"namespaces:delete":          false, // 可以删除命名空间
+		"secrets:list":               false, // 可以列出 secrets
+	}
+
 	for _, p := range permissions {
-		if p.Allowed && p.Resource == "*" && p.Verb == "*" {
-			return true
+		if !p.Allowed {
+			continue
+		}
+
+		key := p.Resource + ":" + p.Verb
+		if _, ok := adminIndicators[key]; ok {
+			adminIndicators[key] = true
 		}
 	}
-	return false
+
+	// 检查是否所有关键权限都有
+	for _, allowed := range adminIndicators {
+		if !allowed {
+			return false
+		}
+	}
+
+	return true
 }

@@ -25,6 +25,9 @@ type Client interface {
 	ExecInteractive(ctx context.Context, opts *types.ExecOptions) error
 	Run(ctx context.Context, opts *types.RunOptions) (*types.RunResult, error)
 
+	// 端口转发
+	PortForward(ctx context.Context, opts *types.PortForwardOptions, stopChan <-chan struct{}) error
+
 	// 健康检查
 	ValidatePort(ctx context.Context) (*types.ProbeResult, error)
 }

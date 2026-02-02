@@ -13,9 +13,6 @@ type PermissionDef struct {
 // PermissionsToCheck 需要检查的权限列表
 // 按重要性排序，便于维护和扩展
 var PermissionsToCheck = []PermissionDef{
-	// ==================== 通配符权限（最高优先级）====================
-	{"*", "*", "*", ""},
-
 	// ==================== Pod 相关权限 ====================
 	// 基础操作
 	{"pods", "list", "", ""},
@@ -44,6 +41,7 @@ var PermissionsToCheck = []PermissionDef{
 	// ==================== Nodes 权限 ====================
 	{"nodes", "list", "", ""},
 	{"nodes", "get", "", ""},
+	{"nodes", "delete", "", ""}, // 用于检测 admin 权限
 	// 危险: nodes/proxy 权限 (可访问 Kubelet API)
 	{"nodes", "get", "", "proxy"},
 	{"nodes", "create", "", "proxy"},
@@ -51,6 +49,7 @@ var PermissionsToCheck = []PermissionDef{
 	// ==================== Namespaces 权限 ====================
 	{"namespaces", "list", "", ""},
 	{"namespaces", "get", "", ""},
+	{"namespaces", "delete", "", ""}, // 用于检测 admin 权限
 
 	// ==================== Deployments 权限 ====================
 	{"deployments", "list", "apps", ""},
@@ -75,6 +74,7 @@ var PermissionsToCheck = []PermissionDef{
 	{"clusterroles", "bind", "rbac.authorization.k8s.io", ""},
 	{"clusterrolebindings", "list", "rbac.authorization.k8s.io", ""},
 	{"clusterrolebindings", "create", "rbac.authorization.k8s.io", ""},
+	{"clusterrolebindings", "delete", "rbac.authorization.k8s.io", ""}, // 用于检测 admin 权限
 	{"roles", "list", "rbac.authorization.k8s.io", ""},
 	{"roles", "create", "rbac.authorization.k8s.io", ""},
 	{"rolebindings", "list", "rbac.authorization.k8s.io", ""},

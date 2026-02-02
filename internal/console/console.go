@@ -22,6 +22,8 @@ type Options struct {
 	TokenFile string // Token 文件路径
 	Token     string // Token 字符串
 	Proxy     string // SOCKS5 代理
+	APIServer string // API Server 地址
+	APIPort   int    // API Server 端口
 }
 
 // Console 交互式控制台
@@ -61,6 +63,12 @@ func NewWithOptions(opts Options) (*Console, error) {
 	}
 	if opts.Proxy != "" {
 		sess.Config.ProxyURL = opts.Proxy
+	}
+	if opts.APIServer != "" {
+		sess.Config.APIServer = opts.APIServer
+	}
+	if opts.APIPort > 0 {
+		sess.Config.APIServerPort = opts.APIPort
 	}
 
 	c := &Console{
@@ -146,6 +154,8 @@ func (c *Console) completer(d prompt.Document) []prompt.Suggest {
 		return c.getDiscoverSuggestions(args, word)
 	case "run":
 		return c.getRunSuggestions(args, word)
+	case "portforward", "pf":
+		return c.getPortForwardSuggestions(args, word)
 	}
 
 	return nil
@@ -163,6 +173,7 @@ func (c *Console) getCommandSuggestions(prefix string) []prompt.Suggest {
 		{Text: "info", Description: "显示当前 SA 详情"},
 		{Text: "exec", Description: "执行命令 (WebSocket)"},
 		{Text: "run", Description: "执行命令 (/run API)"},
+		{Text: "portforward", Description: "端口转发"},
 		{Text: "set", Description: "设置配置"},
 		{Text: "show", Description: "显示信息"},
 		{Text: "export", Description: "导出结果"},
@@ -546,6 +557,48 @@ func (c *Console) getTimeoutSuggestions(word string) []prompt.Suggest {
 		{Text: "3", Description: "3 秒 (默认)"},
 		{Text: "5", Description: "5 秒"},
 	}
+	return prompt.FilterHasPrefix(suggestions, word, true)
+}
+
+// getPortForwardSuggestions 获取 portforward 命令的补全
+func (c *Console) getPortForwardSuggestions(args []string, word string) []prompt.Suggest {
+	// 检查上一个参数
+	if len(args) >= 2 {
+		lastArg := args[len(args)-1]
+		if word != "" && len(args) >= 2 {
+			lastArg = args[len(args)-2]
+		}
+
+		switch lastArg {
+		case "-n":
+			return c.getNamespaceSuggestions(word)
+		case "--address":
+			return []prompt.Suggest{
+				{Text: "127.0.0.1", Description: "仅本地访问（默认）"},
+				{Text: "0.0.0.0", Description: "所有接口"},
+			}
+		}
+	}
+
+	var suggestions []prompt.Suggest
+
+	// 补全选项
+	suggestions = append(suggestions,
+		prompt.Suggest{Text: "-n", Description: "指定命名空间"},
+		prompt.Suggest{Text: "--address", Description: "监听地址"},
+	)
+
+	// 补全 Pod 名称
+	pods := c.session.GetCachedPods()
+	for _, pod := range pods {
+		if pod.Status == "Running" {
+			suggestions = append(suggestions, prompt.Suggest{
+				Text:        pod.PodName,
+				Description: pod.Namespace,
+			})
+		}
+	}
+
 	return prompt.FilterHasPrefix(suggestions, word, true)
 }
 
