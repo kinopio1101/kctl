@@ -3,7 +3,6 @@ package sa
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"kctl/config"
 	"kctl/internal/output"
@@ -11,24 +10,15 @@ import (
 	"kctl/pkg/types"
 )
 
-// InfoCmd info 子命令
 type InfoCmd struct{}
 
 func init() {
 	Register(&InfoCmd{})
 }
 
-func (c *InfoCmd) Name() string {
-	return "info"
-}
-
-func (c *InfoCmd) Aliases() []string {
-	return nil
-}
-
-func (c *InfoCmd) Description() string {
-	return "显示当前 SA 详情"
-}
+func (c *InfoCmd) Name() string        { return "info" }
+func (c *InfoCmd) Aliases() []string   { return nil }
+func (c *InfoCmd) Description() string { return "显示当前 SA 详情" }
 
 func (c *InfoCmd) Usage() string {
 	return `sa info
@@ -50,94 +40,64 @@ func (c *InfoCmd) Execute(sess *session.Session, args []string) error {
 	p.Printf("  %s\n", p.Colored(config.ColorCyan, "ServiceAccount Information"))
 	p.Println("  " + p.Colored(config.ColorGray, "─────────────────────────────────────────"))
 
-	// 基本信息
 	p.Printf("  %-16s: %s\n", "Name", sa.Name)
 	p.Printf("  %-16s: %s\n", "Namespace", sa.Namespace)
-
-	// 风险等级
-	var riskDisplay string
-	if sa.IsClusterAdmin {
-		riskDisplay = p.Colored(config.ColorRed, "ADMIN (cluster-admin)")
-	} else {
-		riskLevel := config.RiskLevel(sa.RiskLevel)
-		display := config.RiskLevelDisplayConfig[riskLevel]
-		riskDisplay = p.Colored(display.Color, display.Label)
-	}
-	p.Printf("  %-16s: %s\n", "Risk Level", riskDisplay)
-
-	// Token 状态
-	tokenStatus := p.Colored(config.ColorGreen, "Valid")
-	if sa.IsExpired {
-		tokenStatus = p.Colored(config.ColorRed, "Expired")
-	}
-	if sa.TokenExpiration != "" {
-		tokenStatus = fmt.Sprintf("%s (expires: %s)", tokenStatus, sa.TokenExpiration)
-	}
-	p.Printf("  %-16s: %s\n", "Token Status", tokenStatus)
+	p.Printf("  %-16s: %s\n", "Risk Level", c.formatRiskDisplay(p, sa))
+	p.Printf("  %-16s: %s\n", "Token Status", c.formatTokenStatus(p, sa))
 
 	p.Println()
-
-	// 权限
-	p.Printf("  %s:\n", p.Colored(config.ColorYellow, "Permissions"))
-	if sa.IsClusterAdmin {
-		p.Printf("    %s\n", p.Colored(config.ColorRed, "*/* (cluster-admin)"))
-	} else if sa.Permissions != "" && sa.Permissions != "[]" {
-		c.printPermissions(p, sa.Permissions)
-	} else {
-		p.Printf("    %s\n", p.Colored(config.ColorGray, "(not scanned - run 'sa scan' to check permissions)"))
-	}
+	c.printPermissions(p, sa)
 
 	p.Println()
-
-	// 安全标识
-	p.Printf("  %s:\n", p.Colored(config.ColorYellow, "Security Flags"))
 	c.printSecurityFlags(p, sa.SecurityFlags)
 
 	p.Println()
-
-	// 关联的 Pod
-	p.Printf("  %s:\n", p.Colored(config.ColorYellow, "Associated Pods"))
 	c.printPods(p, sa.Pods)
 
 	p.Println()
-
 	return nil
 }
 
-func (c *InfoCmd) printPermissions(p output.Printer, permissionsJSON string) {
+func (c *InfoCmd) formatRiskDisplay(p output.Printer, sa *types.ServiceAccountRecord) string {
+	if sa.IsClusterAdmin {
+		return p.Colored(config.ColorRed, "ADMIN (cluster-admin)")
+	}
+	display := config.RiskLevelDisplayConfig[config.RiskLevel(sa.RiskLevel)]
+	return p.Colored(display.Color, display.Label)
+}
+
+func (c *InfoCmd) formatTokenStatus(p output.Printer, sa *types.ServiceAccountRecord) string {
+	status := p.Colored(config.ColorGreen, "Valid")
+	if sa.IsExpired {
+		status = p.Colored(config.ColorRed, "Expired")
+	}
+	if sa.TokenExpiration != "" {
+		status = fmt.Sprintf("%s (expires: %s)", status, sa.TokenExpiration)
+	}
+	return status
+}
+
+func (c *InfoCmd) printPermissions(p output.Printer, sa *types.ServiceAccountRecord) {
+	p.Printf("  %s:\n", p.Colored(config.ColorYellow, "Permissions"))
+
+	if sa.IsClusterAdmin {
+		p.Printf("    %s\n", p.Colored(config.ColorRed, "*/* (cluster-admin)"))
+		return
+	}
+
+	if sa.Permissions == "" || sa.Permissions == "[]" {
+		p.Printf("    %s\n", p.Colored(config.ColorGray, "(not scanned - run 'sa scan' to check permissions)"))
+		return
+	}
+
 	var perms []types.SAPermission
-	if err := json.Unmarshal([]byte(permissionsJSON), &perms); err != nil {
-		// 简单解析
-		parts := strings.Split(permissionsJSON, `"resource":"`)
-		for i := 1; i < len(parts); i++ {
-			endIdx := strings.Index(parts[i], `"`)
-			if endIdx > 0 {
-				resource := parts[i][:endIdx]
-				verbStart := strings.Index(parts[i], `"verb":"`)
-				if verbStart > 0 {
-					verbPart := parts[i][verbStart+8:]
-					verbEnd := strings.Index(verbPart, `"`)
-					if verbEnd > 0 {
-						verb := verbPart[:verbEnd]
-						permStr := fmt.Sprintf("%s:%s", resource, verb)
-						if config.IsCriticalPermission(resource, verb) {
-							permStr = p.Colored(config.ColorRed, permStr)
-						} else if config.IsHighPermission(resource, verb) {
-							permStr = p.Colored(config.ColorYellow, permStr)
-						}
-						p.Printf("    - %s\n", permStr)
-					}
-				}
-			}
-		}
+	if err := json.Unmarshal([]byte(sa.Permissions), &perms); err != nil {
+		p.Printf("    %s\n", p.Colored(config.ColorGray, "(parse error)"))
 		return
 	}
 
 	for _, perm := range perms {
-		resource := perm.Resource
-		if perm.Subresource != "" {
-			resource = perm.Resource + "/" + perm.Subresource
-		}
+		resource := buildFullResource(perm.Resource, perm.Subresource)
 		permStr := fmt.Sprintf("%s:%s", resource, perm.Verb)
 		if config.IsCriticalPermission(resource, perm.Verb) {
 			permStr = p.Colored(config.ColorRed, permStr)
@@ -149,6 +109,8 @@ func (c *InfoCmd) printPermissions(p output.Printer, permissionsJSON string) {
 }
 
 func (c *InfoCmd) printSecurityFlags(p output.Printer, flagsJSON string) {
+	p.Printf("  %s:\n", p.Colored(config.ColorYellow, "Security Flags"))
+
 	if flagsJSON == "" {
 		p.Printf("    %s\n", p.Colored(config.ColorGray, "(none)"))
 		return
@@ -188,6 +150,8 @@ func (c *InfoCmd) printSecurityFlags(p output.Printer, flagsJSON string) {
 }
 
 func (c *InfoCmd) printPods(p output.Printer, podsJSON string) {
+	p.Printf("  %s:\n", p.Colored(config.ColorYellow, "Associated Pods"))
+
 	if podsJSON == "" || podsJSON == "[]" {
 		p.Printf("    %s\n", p.Colored(config.ColorGray, "(none)"))
 		return
@@ -195,23 +159,15 @@ func (c *InfoCmd) printPods(p output.Printer, podsJSON string) {
 
 	var pods []types.SAPodInfo
 	if err := json.Unmarshal([]byte(podsJSON), &pods); err != nil {
-		// 简单解析
-		parts := strings.Split(podsJSON, `"name":"`)
-		for i := 1; i < len(parts); i++ {
-			endIdx := strings.Index(parts[i], `"`)
-			if endIdx > 0 {
-				name := parts[i][:endIdx]
-				p.Printf("    - %s\n", name)
-			}
-		}
+		p.Printf("    %s\n", p.Colored(config.ColorGray, "(parse error)"))
 		return
 	}
 
 	for _, pod := range pods {
-		p.Printf("    - %s/%s", pod.Namespace, pod.Name)
+		line := fmt.Sprintf("%s/%s", pod.Namespace, pod.Name)
 		if pod.Container != "" {
-			p.Printf(" (%s)", pod.Container)
+			line += fmt.Sprintf(" (%s)", pod.Container)
 		}
-		p.Println()
+		p.Printf("    - %s\n", line)
 	}
 }
