@@ -1,6 +1,8 @@
 package session
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -11,6 +13,7 @@ import (
 	kubeletclient "kctl/internal/client/kubelet"
 	"kctl/internal/db"
 	"kctl/internal/output"
+	"kctl/internal/rbac"
 	"kctl/internal/runtime"
 	"kctl/pkg/network"
 	"kctl/pkg/token"
@@ -361,4 +364,103 @@ func (s *Session) GetModeString() string {
 		return "In-Pod (Memory Database)"
 	}
 	return "Local (Memory Database)"
+}
+
+// SetupCurrentSA 解析当前 Token 并设置为当前 SA
+func (s *Session) SetupCurrentSA() error {
+	p := s.Printer
+	ctx := context.Background()
+
+	// 解析 Token 获取 SA 信息
+	tokenInfo, err := token.Parse(s.Config.Token)
+	if err != nil {
+		return fmt.Errorf("无法解析 Token: %w", err)
+	}
+
+	if tokenInfo.ServiceAccount == "" || tokenInfo.Namespace == "" {
+		return fmt.Errorf("Token 中未包含 ServiceAccount 信息")
+	}
+
+	// 创建 ServiceAccountRecord
+	sa := &types.ServiceAccountRecord{
+		Name:        tokenInfo.ServiceAccount,
+		Namespace:   tokenInfo.Namespace,
+		Token:       s.Config.Token,
+		IsExpired:   tokenInfo.IsExpired,
+		RiskLevel:   string(config.RiskNone),
+		CollectedAt: time.Now(),
+		KubeletIP:   s.Config.KubeletIP,
+	}
+
+	// 设置过期时间
+	if !tokenInfo.Expiration.IsZero() {
+		sa.TokenExpiration = tokenInfo.Expiration.Format(time.RFC3339)
+	}
+
+	p.Printf("%s Using ServiceAccount: %s/%s\n",
+		p.Colored(config.ColorGreen, "[+]"),
+		sa.Namespace, sa.Name)
+
+	// 检查当前 SA 的权限
+	p.Printf("%s Checking permissions...\n",
+		p.Colored(config.ColorBlue, "[*]"))
+
+	k8s, err := s.GetK8sClient(s.Config.Token)
+	if err != nil {
+		p.Warning(fmt.Sprintf("创建 K8s 客户端失败: %v", err))
+		s.SetCurrentSA(sa)
+		return nil
+	}
+
+	permissions, err := k8s.CheckCommonPermissions(ctx, tokenInfo.Namespace)
+	if err != nil {
+		p.Warning(fmt.Sprintf("检查权限失败: %v", err))
+		s.SetCurrentSA(sa)
+		return nil
+	}
+
+	// 检查是否是集群管理员
+	isClusterAdmin := rbac.IsClusterAdmin(permissions)
+	sa.IsClusterAdmin = isClusterAdmin
+
+	// 计算风险等级
+	if isClusterAdmin {
+		sa.RiskLevel = string(config.RiskAdmin)
+	} else {
+		sa.RiskLevel = string(rbac.CalculateRiskLevel(permissions))
+	}
+
+	// 保存权限信息
+	var permList []types.SAPermission
+	for _, perm := range permissions {
+		if perm.Allowed {
+			permList = append(permList, types.SAPermission{
+				Resource:    perm.Resource,
+				Verb:        perm.Verb,
+				Group:       perm.Group,
+				Subresource: perm.Subresource,
+				Allowed:     perm.Allowed,
+			})
+		}
+	}
+	permJSON, _ := json.Marshal(permList)
+	sa.Permissions = string(permJSON)
+
+	// 设置为当前 SA
+	s.SetCurrentSA(sa)
+
+	// 显示风险等级
+	if isClusterAdmin {
+		p.Printf("%s Risk Level: %s\n",
+			p.Colored(config.ColorRed, "[!]"),
+			p.Colored(config.ColorRed, "ADMIN (cluster-admin)"))
+	} else {
+		riskLevel := config.RiskLevel(sa.RiskLevel)
+		display := config.RiskLevelDisplayConfig[riskLevel]
+		p.Printf("%s Risk Level: %s\n",
+			p.Colored(config.ColorGreen, "[+]"),
+			p.Colored(display.Color, display.Label))
+	}
+
+	return nil
 }

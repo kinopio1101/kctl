@@ -228,6 +228,22 @@ type ExecStatus struct {
 	Code    int    `json:"code"`
 }
 
+// ==================== Run 相关类型 ====================
+
+// RunOptions 定义 run 执行选项（通过 /run API）
+type RunOptions struct {
+	Namespace string
+	Pod       string
+	Container string
+	Command   string // 单个命令字符串
+}
+
+// RunResult 表示 run 执行结果
+type RunResult struct {
+	Output string
+	Error  string
+}
+
 // ==================== 探测相关类型 ====================
 
 // ProbeResult 表示端口探测结果

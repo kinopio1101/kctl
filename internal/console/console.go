@@ -2,21 +2,17 @@ package console
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
-	"time"
 
 	"github.com/c-bata/go-prompt"
 
 	"kctl/config"
 	"kctl/internal/console/commands"
-	"kctl/internal/rbac"
 	"kctl/internal/session"
 	"kctl/pkg/token"
-	"kctl/pkg/types"
 )
 
 // Options 控制台启动选项
@@ -148,6 +144,8 @@ func (c *Console) completer(d prompt.Document) []prompt.Suggest {
 		return c.getScanFlagSuggestions(word)
 	case "discover", "disc":
 		return c.getDiscoverSuggestions(args, word)
+	case "run":
+		return c.getRunSuggestions(args, word)
 	}
 
 	return nil
@@ -163,7 +161,8 @@ func (c *Console) getCommandSuggestions(prefix string) []prompt.Suggest {
 		{Text: "pods", Description: "列出 Pod"},
 		{Text: "use", Description: "选择 ServiceAccount"},
 		{Text: "info", Description: "显示当前 SA 详情"},
-		{Text: "exec", Description: "执行命令"},
+		{Text: "exec", Description: "执行命令 (WebSocket)"},
+		{Text: "run", Description: "执行命令 (/run API)"},
 		{Text: "set", Description: "设置配置"},
 		{Text: "show", Description: "显示信息"},
 		{Text: "export", Description: "导出结果"},
@@ -461,6 +460,65 @@ func (c *Console) getDiscoverSuggestions(args []string, word string) []prompt.Su
 	return prompt.FilterHasPrefix(suggestions, word, true)
 }
 
+// getRunSuggestions 获取 run 命令的补全
+func (c *Console) getRunSuggestions(args []string, word string) []prompt.Suggest {
+	// 检查上一个参数，决定补全什么
+	if len(args) >= 2 {
+		lastArg := args[len(args)-1]
+		// 如果当前正在输入（word 不为空），检查倒数第二个参数
+		if word != "" && len(args) >= 2 {
+			lastArg = args[len(args)-2]
+		}
+
+		switch lastArg {
+		case "-n":
+			// 补全命名空间
+			return c.getNamespaceSuggestions(word)
+		case "-c":
+			// 补全容器名
+			return c.getContainerSuggestions(args, word)
+		case "--filter":
+			// 补全要排除的 Pod
+			return c.getFilterPodSuggestions(word)
+		case "--filter-ns":
+			// 补全要排除的命名空间
+			return c.getNamespaceSuggestions(word)
+		case "--concurrency":
+			// 补全并发数
+			return c.getConcurrencySuggestions(word)
+		case "--cmd":
+			// 命令参数，不补全
+			return nil
+		}
+	}
+
+	var suggestions []prompt.Suggest
+
+	// 补全选项
+	suggestions = append(suggestions,
+		prompt.Suggest{Text: "--cmd", Description: "要执行的命令（必需）"},
+		prompt.Suggest{Text: "-n", Description: "指定命名空间"},
+		prompt.Suggest{Text: "-c", Description: "指定容器"},
+		prompt.Suggest{Text: "--all-pods", Description: "在所有 Pod 中执行"},
+		prompt.Suggest{Text: "--filter", Description: "排除指定 Pod（逗号分隔）"},
+		prompt.Suggest{Text: "--filter-ns", Description: "排除指定命名空间（逗号分隔）"},
+		prompt.Suggest{Text: "--concurrency", Description: "并发数（默认: 10）"},
+	)
+
+	// 补全 Pod 名称
+	pods := c.session.GetCachedPods()
+	for _, pod := range pods {
+		if pod.Status == "Running" {
+			suggestions = append(suggestions, prompt.Suggest{
+				Text:        pod.PodName,
+				Description: pod.Namespace,
+			})
+		}
+	}
+
+	return prompt.FilterHasPrefix(suggestions, word, true)
+}
+
 // getPortSuggestions 获取端口补全
 func (c *Console) getPortSuggestions(word string) []prompt.Suggest {
 	suggestions := []prompt.Suggest{
@@ -563,108 +621,11 @@ func (c *Console) autoConnect() {
 	}
 
 	// 解析当前 Token 并设置为当前 SA
-	c.setupCurrentSA()
+	if err := c.session.SetupCurrentSA(); err != nil {
+		p.Warning(fmt.Sprintf("设置 SA 失败: %v", err))
+	}
 
 	fmt.Println() // 空行分隔
-}
-
-// setupCurrentSA 解析当前 Token 并设置为当前 SA
-func (c *Console) setupCurrentSA() {
-	p := c.session.Printer
-	ctx := context.Background()
-
-	// 解析 Token 获取 SA 信息
-	tokenInfo, err := token.Parse(c.session.Config.Token)
-	if err != nil {
-		p.Warning(fmt.Sprintf("无法解析 Token: %v", err))
-		return
-	}
-
-	if tokenInfo.ServiceAccount == "" || tokenInfo.Namespace == "" {
-		p.Warning("Token 中未包含 ServiceAccount 信息")
-		return
-	}
-
-	// 创建 ServiceAccountRecord
-	sa := &types.ServiceAccountRecord{
-		Name:        tokenInfo.ServiceAccount,
-		Namespace:   tokenInfo.Namespace,
-		Token:       c.session.Config.Token,
-		IsExpired:   tokenInfo.IsExpired,
-		RiskLevel:   string(config.RiskNone),
-		CollectedAt: time.Now(),
-		KubeletIP:   c.session.Config.KubeletIP,
-	}
-
-	// 设置过期时间
-	if !tokenInfo.Expiration.IsZero() {
-		sa.TokenExpiration = tokenInfo.Expiration.Format(time.RFC3339)
-	}
-
-	p.Printf("%s Using ServiceAccount: %s/%s\n",
-		p.Colored(config.ColorGreen, "[+]"),
-		sa.Namespace, sa.Name)
-
-	// 检查当前 SA 的权限
-	p.Printf("%s Checking permissions...\n",
-		p.Colored(config.ColorBlue, "[*]"))
-
-	k8s, err := c.session.GetK8sClient(c.session.Config.Token)
-	if err != nil {
-		p.Warning(fmt.Sprintf("创建 K8s 客户端失败: %v", err))
-		c.session.SetCurrentSA(sa)
-		return
-	}
-
-	permissions, err := k8s.CheckCommonPermissions(ctx, tokenInfo.Namespace)
-	if err != nil {
-		p.Warning(fmt.Sprintf("检查权限失败: %v", err))
-		c.session.SetCurrentSA(sa)
-		return
-	}
-
-	// 检查是否是集群管理员
-	isClusterAdmin := rbac.IsClusterAdmin(permissions)
-	sa.IsClusterAdmin = isClusterAdmin
-
-	// 计算风险等级
-	if isClusterAdmin {
-		sa.RiskLevel = string(config.RiskAdmin)
-	} else {
-		sa.RiskLevel = string(rbac.CalculateRiskLevel(permissions))
-	}
-
-	// 保存权限信息
-	var permList []types.SAPermission
-	for _, perm := range permissions {
-		if perm.Allowed {
-			permList = append(permList, types.SAPermission{
-				Resource:    perm.Resource,
-				Verb:        perm.Verb,
-				Group:       perm.Group,
-				Subresource: perm.Subresource,
-				Allowed:     perm.Allowed,
-			})
-		}
-	}
-	permJSON, _ := json.Marshal(permList)
-	sa.Permissions = string(permJSON)
-
-	// 设置为当前 SA
-	c.session.SetCurrentSA(sa)
-
-	// 显示风险等级
-	if isClusterAdmin {
-		p.Printf("%s Risk Level: %s\n",
-			p.Colored(config.ColorRed, "[!]"),
-			p.Colored(config.ColorRed, "ADMIN (cluster-admin)"))
-	} else {
-		riskLevel := config.RiskLevel(sa.RiskLevel)
-		display := config.RiskLevelDisplayConfig[riskLevel]
-		p.Printf("%s Risk Level: %s\n",
-			p.Colored(config.ColorGreen, "[+]"),
-			p.Colored(display.Color, display.Label))
-	}
 }
 
 // GetSession 获取会话

@@ -1,10 +1,12 @@
 package commands
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 
 	"kctl/config"
+	"kctl/internal/output"
 	"kctl/internal/session"
 	"kctl/pkg/token"
 )
@@ -65,6 +67,8 @@ func (c *SetCmd) Execute(sess *session.Session, args []string) error {
 	case "target", "kubelet-ip":
 		sess.Config.KubeletIP = value
 		p.Success(fmt.Sprintf("Kubelet IP set to: %s", value))
+		// 自动重连（不更新 SA，因为 token 没变）
+		reconnect(sess, p, false)
 
 	case "port", "kubelet-port":
 		port, err := strconv.Atoi(value)
@@ -73,6 +77,8 @@ func (c *SetCmd) Execute(sess *session.Session, args []string) error {
 		}
 		sess.Config.KubeletPort = port
 		p.Success(fmt.Sprintf("Kubelet Port set to: %d", port))
+		// 自动重连（不更新 SA，因为 token 没变）
+		reconnect(sess, p, false)
 
 	case "token":
 		sess.Config.Token = value
@@ -82,6 +88,8 @@ func (c *SetCmd) Execute(sess *session.Session, args []string) error {
 			display = display[:20] + "..."
 		}
 		p.Success(fmt.Sprintf("Token set to: %s", display))
+		// 自动重连并更新 SA（token 变了，SA 也变了）
+		reconnect(sess, p, true)
 
 	case "token-file":
 		tokenStr, err := token.Read(value)
@@ -91,6 +99,8 @@ func (c *SetCmd) Execute(sess *session.Session, args []string) error {
 		sess.Config.Token = tokenStr
 		sess.Config.TokenFile = value
 		p.Success(fmt.Sprintf("Token loaded from: %s", value))
+		// 自动重连并更新 SA（token 变了，SA 也变了）
+		reconnect(sess, p, true)
 
 	case "api-server":
 		sess.Config.APIServer = value
@@ -112,8 +122,8 @@ func (c *SetCmd) Execute(sess *session.Session, args []string) error {
 		} else {
 			p.Success(fmt.Sprintf("Proxy set to: %s", value))
 		}
-		// 断开现有连接，下次连接时使用新代理
-		sess.Disconnect()
+		// 自动重连（不更新 SA，因为 token 没变）
+		reconnect(sess, p, false)
 
 	case "concurrency":
 		n, err := strconv.Atoi(value)
@@ -139,4 +149,60 @@ func (c *SetCmd) Execute(sess *session.Session, args []string) error {
 	}
 
 	return nil
+}
+
+// reconnect 重新连接并可选地更新 SA
+func reconnect(sess *session.Session, p output.Printer, updateSA bool) {
+	// 断开现有连接
+	sess.Disconnect()
+
+	// 如果需要更新 SA，先清除当前 SA
+	if updateSA {
+		sess.SetCurrentSA(nil)
+	}
+
+	// 检查配置是否完整
+	if sess.Config.KubeletIP == "" {
+		p.Info("请设置 target 后执行 'connect'")
+		return
+	}
+	if sess.Config.Token == "" {
+		p.Info("请设置 token 后执行 'connect'")
+		return
+	}
+
+	// 尝试重新连接
+	p.Printf("%s Reconnecting to Kubelet %s:%d...\n",
+		p.Colored(config.ColorBlue, "[*]"),
+		sess.Config.KubeletIP,
+		sess.Config.KubeletPort)
+
+	if err := sess.Connect(); err != nil {
+		p.Warning(fmt.Sprintf("自动重连失败: %v", err))
+		return
+	}
+
+	// 验证连接
+	ctx := context.Background()
+	kubelet, err := sess.GetKubeletClient()
+	if err != nil {
+		p.Warning(fmt.Sprintf("获取客户端失败: %v", err))
+		return
+	}
+
+	result, err := kubelet.ValidatePort(ctx)
+	if err != nil {
+		p.Warning(fmt.Sprintf("连接成功，但无法验证 Kubelet 端口: %v", err))
+	} else if result.IsKubelet {
+		p.Success("Reconnected successfully")
+	} else {
+		p.Warning("连接成功，但目标可能不是 Kubelet")
+	}
+
+	// 如果需要，更新 SA 信息
+	if updateSA {
+		if err := sess.SetupCurrentSA(); err != nil {
+			p.Warning(fmt.Sprintf("更新 SA 信息失败: %v", err))
+		}
+	}
 }

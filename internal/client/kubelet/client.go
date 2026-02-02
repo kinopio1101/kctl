@@ -23,6 +23,7 @@ type Client interface {
 	// 命令执行
 	Exec(ctx context.Context, opts *types.ExecOptions) (*types.ExecResult, error)
 	ExecInteractive(ctx context.Context, opts *types.ExecOptions) error
+	Run(ctx context.Context, opts *types.RunOptions) (*types.RunResult, error)
 
 	// 健康检查
 	ValidatePort(ctx context.Context) (*types.ProbeResult, error)
